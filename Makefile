@@ -1,4 +1,6 @@
 CURRENT	= $(shell uname -r)
+#TARGET	= usbnet
+#OBJS	= usbnet.o
 TARGET	= ax88179_178a
 OBJS	= ax88179_178a.o
 MDIR	= drivers/net/usb

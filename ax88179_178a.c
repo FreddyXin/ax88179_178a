@@ -42,7 +42,7 @@
 
 #include "asix.h"
 
-#define DRV_VERSION	"1.2.0"
+#define DRV_VERSION	"1.3.0"
 
 static char version[] =
 KERN_INFO "ASIX USB Ethernet Adapter:v" DRV_VERSION 
@@ -53,13 +53,8 @@ static int msg_enable = 0;
 module_param (msg_enable, int, 0);
 MODULE_PARM_DESC (msg_enable, "usbnet msg_enable");
 
-static int bi_size = 0;
-static int bsize = -1;
-module_param (bsize, int, 0);
-MODULE_PARM_DESC (bsize, "Maximum transfer size per bulk in");
 
-
-/* ASIX AX8817X based USB 2.0 Ethernet Devices */
+/* ASIX AX88179/178A based USB 3.0/2.0 Gigabit Ethernet Devices */
 
 static int ax88179_read_cmd(struct usbnet *dev, u8 cmd, u16 value, u16 index,
 			    u16 size, void *data)
@@ -149,7 +144,7 @@ ax88179_write_cmd_async(struct usbnet *dev, u8 cmd, u16 value, u16 index,
 static void ax88179_status(struct usbnet *dev, struct urb *urb)
 {
 	struct ax88179_int_data *event;
-	struct ax88179_data *data = (struct ax88179_data *)dev->driver_priv;
+	struct ax88179_data *data = (struct ax88179_data *)&dev->driver_priv;
 	int link;
 
 	if (urb->actual_length < 8)
@@ -160,11 +155,9 @@ static void ax88179_status(struct usbnet *dev, struct urb *urb)
 	if (netif_carrier_ok(dev->net) != link) {
 		if (link) {
 			data->linkup = 1;
-			if (data->lr_done < 2)
 	  		   usbnet_defer_kevent (dev, EVENT_LINK_RESET );
 		} else {			
 			data->linkup = 0;
-			data->lr_done = 0;
 			netif_carrier_off(dev->net);
 		}
 		netdev_info(dev->net, "ax8817X - Link status is: %d\n", link);
@@ -239,10 +232,10 @@ static int ax88179_suspend (struct usb_interface *intf,
 	/* Disable RX path */
 	ax88179_read_cmd(dev, AX_ACCESS_MAC, AX_MEDIUM_STATUS_MODE, 2, 2, tmp16);
 	*tmp16 &= ~AX_MEDIUM_RECEIVE_EN;
+	ax88179_write_cmd(dev, AX_ACCESS_MAC,  AX_MEDIUM_STATUS_MODE, 2, 2, tmp16);
 
 	/* Force bz */
 	ax88179_read_cmd(dev, AX_ACCESS_MAC, AX_PHYPWR_RSTCTL, 2, 2, tmp16);
-	//*tmp16 |= AX_PHYPWR_RSTCTL_BZ | AX_PHYPWR_RSTCTL_IPRL | AX_PHYPWR_RSTCTL_WOLLP;
 	*tmp16 |= AX_PHYPWR_RSTCTL_BZ | AX_PHYPWR_RSTCTL_IPRL;
 	ax88179_write_cmd(dev, AX_ACCESS_MAC, AX_PHYPWR_RSTCTL, 2, 2, tmp16);
 
@@ -352,6 +345,7 @@ ax88179_set_wol(struct net_device *net, struct ethtool_wolinfo *wolinfo)
 		*opt &= ~AX_MONITOR_MODE_RWMP;
 
 	ax88179_write_cmd(dev, AX_ACCESS_MAC, AX_MONITOR_MODE, 1, 1, opt);
+
 	kfree (opt);
 
 	return 0;
@@ -404,13 +398,13 @@ static int ax88179_set_settings(struct net_device *net, struct ethtool_cmd *cmd)
 	return mii_ethtool_sset(&dev->mii,cmd);
 }
 
-
 static int ax88179_ioctl (struct net_device *net, struct ifreq *rq, int cmd)
 {
 	struct usbnet *dev = netdev_priv(net);
-
-	return generic_mii_ioctl(&dev->mii, if_mii(rq), cmd, NULL);
+	
+	return  generic_mii_ioctl(&dev->mii, if_mii(rq), cmd, NULL);
 }
+
 
 #if LINUX_VERSION_CODE < KERNEL_VERSION(3,3,0)
 static int ax88179_set_csums(struct usbnet *dev)
@@ -514,7 +508,7 @@ static struct ethtool_ops ax88179_ethtool_ops = {
 static void ax88179_set_multicast(struct net_device *net)
 {
 	struct usbnet *dev = netdev_priv(net);
-	struct ax88179_data *data = (struct ax88179_data *)dev->driver_priv;
+	struct ax88179_data *data = (struct ax88179_data *)&dev->driver_priv;
 	u8 *m_filter = (u8*) dev->data;
 	u16 rx_ctl = (AX_RX_CTL_START | AX_RX_CTL_AB | AX_RX_CTL_IPE);
 	int mc_count;
@@ -588,6 +582,7 @@ static int ax88179_set_mac_addr (struct net_device *net, void *p)
 	/* Set the MAC address */
 	return ax88179_write_cmd (dev, AX_ACCESS_MAC, AX_NODE_ID, ETH_ALEN,
 						ETH_ALEN, net->dev_addr);
+
 }
 
 #if LINUX_VERSION_CODE > KERNEL_VERSION(2,6,29)
@@ -891,7 +886,6 @@ static int ax88179_bind(struct usbnet *dev, struct usb_interface *intf)
 	void *buf;
 	u16 *tmp16;
 	u8 *tmp;
-	u16 bi_timer;
 
 	struct ax88179_data *ax179_data = (struct ax88179_data *)dev->driver_priv;
 
@@ -945,15 +939,14 @@ static int ax88179_bind(struct usbnet *dev, struct usb_interface *intf)
 
 	// default for USB3.0 to Giga
 	// Bulk in timer
-	bi_timer = (24 * 1024 * 8) / 1000;
-	*(tmp + 1) = (bi_timer & 0xFF);
-	*(tmp + 2) = (bi_timer >> 8) & 0xFF;
-	// Bulk in size		
-	*(tmp + 3) = 24;
+	*(tmp + 1) = 0x41;
+	*(tmp + 2) = 0x00;
+	// Bulk in size			
+	*(tmp + 3) = 0x14;
 	// Bulk in IFG
-	*(tmp + 4) = 0xff;
-
+	*(tmp + 4) = 0x40;
 	ax88179_write_cmd(dev, AX_ACCESS_MAC, AX_RX_BULKIN_QCTRL, 5, 5, tmp);
+	dev->rx_urb_size = (1024 * 20);
 
 	tmp[0] = 0x34;
 	ax88179_write_cmd(dev, AX_ACCESS_MAC, AX_PAUSE_WATERLVL_LOW, 1, 1, tmp);
@@ -1002,8 +995,6 @@ static int ax88179_bind(struct usbnet *dev, struct usb_interface *intf)
 	*tmp16 = AX_RX_CTL_DROPCRCERR | AX_RX_CTL_IPE | AX_RX_CTL_START |
 			AX_RX_CTL_AP | AX_RX_CTL_AMALL | AX_RX_CTL_AB;
 	ax88179_write_cmd(dev, AX_ACCESS_MAC, 0x0b, 2, 2, tmp16);
-
-	dev->rx_urb_size = (1024 * 24);
 
 	*tmp = AX_MONITOR_MODE_PMETYPE | AX_MONITOR_MODE_PMEPOL |
 						AX_MONITOR_MODE_RWMP;
@@ -1101,7 +1092,7 @@ static int ax88179_rx_fixup(struct usbnet *dev, struct sk_buff *skb)
 		pkt_len = pkt_hdr->len;
 
 		/* CRC or MII error */
-		if (pkt_hdr->crc || pkt_hdr->mii || pkt_hdr->drop) {
+		if (pkt_hdr->crc  || pkt_hdr->drop) {
 			skb_pull(skb, (pkt_len + 7) & 0xFFF8);
 			pkt_hdr++;
 			continue;
@@ -1249,16 +1240,11 @@ static int ax88179_unlink_urbs (struct usbnet *dev, struct sk_buff_head *q)
 	return count;
 }
 
-
 static int ax88179_link_reset (struct usbnet *dev)
 {
-	struct ax88179_data *data = (struct ax88179_data *)dev->driver_priv;
-	struct ethtool_cmd ecmd;
-	void *buf;
-	u8 *tmp;
-	u16 bi_timer = 0;
-	u16 mode;
- 	u16 delay = HZ/10;
+	struct ax88179_data *data = (struct ax88179_data *)&dev->driver_priv;
+	u8 tmp[5], link_sts;
+	u16 mode, tmp16, delay = HZ/10;
 	u32 tmp32 = 0x40000000;
 	unsigned long jTimeout;
 
@@ -1280,178 +1266,45 @@ static int ax88179_link_reset (struct usbnet *dev)
 		if (time_after(jiffies, jTimeout))
 			return 0;
 	}
-	data->lr_done++;
 
 	mode = AX_MEDIUM_RECEIVE_EN    | AX_MEDIUM_TXFLOW_CTRLEN |
 		   AX_MEDIUM_RXFLOW_CTRLEN | AX_MEDIUM_ALWAYS_ONE;
 
-	buf = kmalloc (5, GFP_KERNEL);
-	tmp = (u8 *)buf;
-	mii_ethtool_gset (&dev->mii, &ecmd);
+	ax88179_read_cmd (dev, AX_ACCESS_MAC, PHYSICAL_LINK_STATUS, 1, 1, &link_sts);
+	ax88179_read_cmd(dev, AX_ACCESS_PHY, AX88179_PHY_ID, GMII_PHY_PHYSR, 2, &tmp16);
 
-	bi_size = bsize;
-	if((bi_size > 0) && (bi_size < 5))
-	   bi_size = 5;
-	else if(bi_size > 24)
-	   bi_size = 24;
-
-	if(!bsize)
-	  memset(tmp, 0, 5);
-
-	ax88179_read_cmd (dev, AX_ACCESS_MAC, PHYSICAL_LINK_STATUS, 1, 1, tmp);
-
-	if (ecmd.speed == SPEED_1000) {
+	if (!(tmp16 & GMII_PHY_PHYSR_LINK))
+		return 0;
+	else if (GMII_PHY_PHYSR_GIGA == (tmp16 & GMII_PHY_PHYSR_SMASK)) {
 		mode |= AX_MEDIUM_GIGAMODE;	/* Bit 0 : GM */
-		if (*tmp & AX_USB_SS) {
-     	   	   if(bsize)
-		   {
-			// Bulk in size	
-			if(bsize < 0)
-			  bi_size = 20;	
-
-			*(tmp + 3) = bi_size;		
-			// Bulk in timer
-			bi_timer = (bi_size * 1024 * 8) / 1000;
-			*(tmp + 1) = (bi_timer & 0xFF);
-			*(tmp + 2) = (bi_timer >> 8) & 0xFF;
-			// Bulk in IFG
-			*(tmp + 4) = 0xff;
-
-		   }
-		   printk(KERN_INFO "USB3.0 Speed 1000\n");
-		}
-		else if (*tmp & AX_USB_HS) {
-     	   	   if(bsize)
-		   {
-			// Bulk in size	
-			if(bsize < 0)
-			  bi_size = 24;	
-
-			*(tmp + 3) = bi_size;		
-			// Bulk in timer
-			bi_timer = (bi_size * 1024 * 8) / 330;
-			*(tmp + 1) = (bi_timer & 0xFF);
-			*(tmp + 2) = (bi_timer >> 8) & 0xFF;
-			// Bulk in IFG
-			//*(tmp + 4) = 0x08;
-			*(tmp + 4) = 0x00;
-
-		   }
-		   printk(KERN_INFO "USB2.0 Speed 1000\n");
-		}
-		else {
-     	   	   if(bsize)
-		   {
-			// Bulk in size	
-			if(bsize < 0)
-			  bi_size = 24;	
-
-			*(tmp + 3) = bi_size;		
-			// Bulk in timer
-			bi_timer = (bi_size * 1024 * 8) / 10;
-			*(tmp + 1) = (bi_timer & 0xFF);
-			*(tmp + 2) = (bi_timer >> 8) & 0xFF;
-			// Bulk in IFG
-			//*(tmp + 4) = 0x08;
-			*(tmp + 4) = 0x00;
-
-		   }
-		   printk(KERN_INFO "USB1.1 Speed 1000\n");
-		}
-
-	} else if (ecmd.speed == SPEED_100) {
-		mode |= AX_MEDIUM_PS;	/* Bit 9 : PS */
-		if (*tmp & AX_USB_SS) {
- 	   	   if(bsize)
-		   {
-			// Bulk in size	
-			if(bsize < 0)
-			  bi_size = 24;	
-
-			*(tmp + 3) = bi_size;		
-			// Bulk in timer
-			bi_timer = (bi_size * 1024 * 8) / 100;
-			*(tmp + 1) = (bi_timer & 0xFF);
-			*(tmp + 2) = (bi_timer >> 8) & 0xFF;
-			// Bulk in IFG
-			*(tmp + 4) = 0x00;
-
-		   }
-		   printk(KERN_INFO "USB3.0 Speed 100\n");
-		}
-		else if (*tmp & AX_USB_HS) {
-
- 	   	   if(bsize)
-		   {
-			// Bulk in size	
-			if(bsize < 0)
-			  bi_size = 24;	
-
-			*(tmp + 3) = bi_size;		
-			// Bulk in timer
-			bi_timer = (bi_size * 1024 * 8) / 100;
-			*(tmp + 1) = (bi_timer & 0xFF);
-			*(tmp + 2) = (bi_timer >> 8) & 0xFF;
-			// Bulk in IFG
-			*(tmp + 4) = 0x00;
-
-		   }
-		   printk(KERN_INFO "USB2.0 Speed 100\n");
-		}
-		else {
-     	   	   if(bsize)
-		   {
-			// Bulk in size	
-			if(bsize < 0)
-			  bi_size = 24;	
-
-			*(tmp + 3) = bi_size;		
-			// Bulk in timer
-			bi_timer = (bi_size * 1024 * 8) / 10;
-			*(tmp + 1) = (bi_timer & 0xFF);
-			*(tmp + 2) = (bi_timer >> 8) & 0xFF;
-			// Bulk in IFG
-			//*(tmp + 4) = 0x08;
-			*(tmp + 4) = 0x00;
-
-		   }
-		   printk(KERN_INFO "USB1.1 Speed 100\n");
-		}
-	} else {
-		// Bulk in size	
-		if(bsize < 0)
-		  bi_size = 24;	
-
-		*(tmp + 3) = bi_size;		
-		// Bulk in timer
-		bi_timer = (bi_size * 1024 * 8) / 10;
-		*(tmp + 1) = (bi_timer & 0xFF);
-		*(tmp + 2) = (bi_timer >> 8) & 0xFF;
-		// Bulk in IFG
-		*(tmp + 4) = 0x00;
-
-		if (*tmp & AX_USB_SS)
-		  printk(KERN_INFO "USB3.0 Speed 10 ");
-		else if (*tmp & AX_USB_HS)
-   		  printk(KERN_INFO "USB2.0 Speed 10 ");
+		if (link_sts & AX_USB_SS)
+			memcpy(tmp, &AX88179_BULKIN_SIZE[0], 5);
+		else if (link_sts & AX_USB_HS)
+			memcpy(tmp, &AX88179_BULKIN_SIZE[1], 5);
 		else
-		  printk(KERN_INFO "USB1.1 Speed 10 ");
+			memcpy(tmp, &AX88179_BULKIN_SIZE[3], 5);
 	}
+	else if (GMII_PHY_PHYSR_100 == (tmp16 & GMII_PHY_PHYSR_SMASK)) {
+		mode |= AX_MEDIUM_PS;	/* Bit 9 : PS */
+		if (link_sts & (AX_USB_SS | AX_USB_HS))
+			memcpy(tmp, &AX88179_BULKIN_SIZE[2], 5);
+		else
+			memcpy(tmp, &AX88179_BULKIN_SIZE[3], 5);
+	} else
+		memcpy(tmp, &AX88179_BULKIN_SIZE[3], 5);
 
 	/* RX bulk configuration */
-	*tmp = AX_RX_BULKIN_QCTRL_TIME | AX_RX_BULKIN_QCTRL_SIZE | AX_RX_BULKIN_QCTRL_IFG;
 	ax88179_write_cmd(dev, AX_ACCESS_MAC, AX_RX_BULKIN_QCTRL, 5, 5, tmp);
 
-	if (ecmd.duplex == DUPLEX_FULL) {
+	if (tmp16 & GMII_PHY_PHYSR_FULL)
 		mode |= AX_MEDIUM_FULL_DUPLEX;	/* Bit 1 : FD */
-		printk(KERN_INFO "Full duplex\n");
-	} 
+ 
+	dev->rx_urb_size = (1024 * tmp[3]);
 
 	mode |= 0x08;
 	printk(KERN_INFO "Write medium type: 0x%04x\n", mode);
 	/* Configure default medium type => giga */
 	ax88179_write_cmd(dev, AX_ACCESS_MAC, AX_MEDIUM_STATUS_MODE, 2, 2, &mode);
-
 	mii_check_media (&dev->mii, 1, 1);
 
 	return 0;
@@ -1469,7 +1322,6 @@ static int ax88179_reset (struct usbnet *dev)
 	tmp = (u8 *)buf;
 
 	ax179_data->linkup = 0;
-	ax179_data->lr_done = 0;
 	/* Power up ethernet PHY */
 	*tmp16 = 0;
 	ax88179_write_cmd(dev, AX_ACCESS_MAC, AX_PHYPWR_RSTCTL, 2, 2, tmp16);
@@ -1494,14 +1346,14 @@ static int ax88179_reset (struct usbnet *dev)
 	*tmp = AX_RX_BULKIN_QCTRL_TIME | AX_RX_BULKIN_QCTRL_IFG |
 						AX_RX_BULKIN_QCTRL_SIZE;
 	// Bulk in timer
-	*(tmp + 1) = 0x66;
+	*(tmp + 1) = 0x41;
 	*(tmp + 2) = 0x00;
 	// Bulk in size			
 	*(tmp + 3) = 0x14;
 	// Bulk in IFG
-	*(tmp + 4) = 0xff;
-
+	*(tmp + 4) = 0x40;
 	ax88179_write_cmd(dev, AX_ACCESS_MAC, AX_RX_BULKIN_QCTRL, 5, 5, tmp);
+	dev->rx_urb_size = (1024 * 20);
 
 	tmp[0] = 0x34;
 	ax88179_write_cmd(dev, AX_ACCESS_MAC, AX_PAUSE_WATERLVL_LOW, 1, 1, tmp);
@@ -1527,7 +1379,6 @@ static int ax88179_reset (struct usbnet *dev)
 			AX_RX_CTL_AP | AX_RX_CTL_AMALL | AX_RX_CTL_AB;
 	ax88179_write_cmd(dev, AX_ACCESS_MAC, 0x0b, 2, 2, tmp16);
 
-	dev->rx_urb_size = (1024 * 24);
 
 	*tmp = AX_MONITOR_MODE_PMETYPE | AX_MONITOR_MODE_PMEPOL |
 						AX_MONITOR_MODE_RWMP;
@@ -1563,8 +1414,8 @@ static int ax88179_reset (struct usbnet *dev)
 static int ax88179_stop (struct usbnet *dev)
 {
 	u16 tmp16;
-	struct ax88179_data *data = (struct ax88179_data *)dev->driver_priv;
-	data->lr_done = 0;
+
+	ax88179_read_cmd(dev, AX_ACCESS_MAC, AX_MEDIUM_STATUS_MODE, 2, 2, &tmp16);
 	tmp16 &= ~AX_MEDIUM_RECEIVE_EN;
 	ax88179_write_cmd(dev, AX_ACCESS_MAC, AX_MEDIUM_STATUS_MODE, 2, 2, &tmp16);
 	return 0;
@@ -1578,7 +1429,6 @@ static int ax_suspend (struct usb_interface *intf,
 {
 	struct usbnet *dev = usb_get_intfdata(intf);
 	struct ax88179_data *data = (struct ax88179_data *)dev->driver_priv;
-	data->lr_done = 0;
 	return data->suspend (intf, message);
 }
 
@@ -1617,17 +1467,34 @@ static const struct driver_info ax88178a_info = {
 	.tx_fixup = ax88179_tx_fixup,
 };
 
+static const struct driver_info sitecom_info = {
+	.description = "Sitecom USB 3.0 to Gigabit Adapter",
+	.bind = ax88179_bind,
+	.unbind = ax88179_unbind,
+	.status = ax88179_status,
+	.link_reset = ax88179_link_reset,
+	.reset = ax88179_reset,
+	.stop = ax88179_stop,
+	.flags = FLAG_ETHER | FLAG_FRAMING_AX,
+	.rx_fixup = ax88179_rx_fixup,
+	.tx_fixup = ax88179_tx_fixup,
+};
+
 static const struct usb_device_id	products [] = {
 {
-	// ASIX AX88179 10/100/1000
+	/* ASIX AX88179 10/100/1000 */
         USB_DEVICE (0x0b95, 0x1790),
         .driver_info = (unsigned long) &ax88179_info,
-}, {
-	// ASIX AX88178A 10/100/1000
-        USB_DEVICE (0x0b95, 0x178A),
+},{
+	/* ASIX AX88178A 10/100/1000 */
+        USB_DEVICE (0x0b95, 0x178a),
         .driver_info = (unsigned long) &ax88178a_info,
+},{
+	/* Sitecom USB 3.0 to Gigabit Adapter */
+        USB_DEVICE (0x0df6, 0x0072),
+        .driver_info = (unsigned long) &sitecom_info,
 },
-	{ },		// END
+	{ },		/* END */
 };
 MODULE_DEVICE_TABLE(usb, products);
 

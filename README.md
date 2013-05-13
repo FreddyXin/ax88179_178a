@@ -11,6 +11,15 @@ Driver Compilation & Configuration on the Linux
 ==================
 Revision History :
 ==================
+Version 1.3.0		Dec. 13, 2012
+ * Modified bulk in parameter to improve the throughput on ARM.
+ * Fixed suspend/resume issue on ARM.
+ * Fixed down/up network interface issue on ARM.
+ * Added Sitecom VID:DID 0df6:0072.
+ * Removed checking mii_err in rx_fixup function to 
+   avoid packet loss under some circumstances.
+ * Modified the ax88179_link_reset function.
+
 Version 1.2.0		Aug. 28, 2012
  * Modified the ax88179_link_reset function.
  * Implemented the auto detach function.
