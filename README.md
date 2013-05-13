@@ -11,6 +11,11 @@ Driver Compilation & Configuration on the Linux
 ==================
 Revision History :
 ==================
+Version 1.1.0		May. 08, 2012
+ * Modified the ax88179_led_workaround function.
+ * Fixups the ethtool_ops struct for compilation issues in newest kernel version 3.3.0. 
+ * Fixups the net_device_ops struct for compilation issues in newest kernel version 3.2.0.
+
 Version	1.0.0 Beta	Jan. 4, 2012
  * Initial release.
 

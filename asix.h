@@ -17,6 +17,24 @@
 #define AX_RELOAD_EEPROM_EFUSE		0x06
 #define AX_ACCESS_MFAB			0x10
 
+#define PHYSICAL_LINK_STATUS		0x02
+	#define	AX_USB_SS		0x04
+	#define	AX_USB_HS		0x02
+
+#define GENERAL_STATUS				0x03
+	#define	AX_SECLD		0x04	/* Check AX88179 version. UA1:Bit2 = 0,  UA2:Bit2 = 1 */
+
+
+
+#define AX_SROM_ADDR			0x07
+#define AX_SROM_CMD			0x0a
+	#define EEP_RD				0x04		/* EEprom read command */
+	#define EEP_BUSY			0x10		/* EEprom access module busy */
+
+
+#define AX_SROM_DATA_LOW		0x08
+#define AX_SROM_DATA_HIGH		0x09
+
 #define AX_RX_CTL			0x0b
 	#define AX_RX_CTL_DROPCRCERR		0x0100		/* Drop CRC error packet */
 	#define AX_RX_CTL_IPE			0x0200		/* Enable IP header in receive buffer aligned on 32-bit aligment */
@@ -115,6 +133,10 @@
 #define AX_PAUSE_WATERLVL_LOW		0x55
 
 
+#define AX_EEP_EFUSE_CORRECT			0x00
+
+
+
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////
 // GMII register definitions
 #define GMII_PHY_CONTROL		0x00	// control reg
@@ -193,20 +215,10 @@
 #define GMII_AUX_SPEED_100			0x0008
 
 #define GMII_LED_ACTIVE				0x1a
-	#define GMII_LED_ACTIVE_MASK		0xff8f
+	#define GMII_LED_ACTIVE_MASK	0xff8f
 	#define GMII_LED0_ACTIVE		(1 << 4)
 	#define GMII_LED1_ACTIVE		(1 << 5)
 	#define GMII_LED2_ACTIVE		(1 << 6)
-
-#define GMII_PHY_PAGE_SELECT			0x1f
-	#define GMII_PHY_PAGE_SELECT_EXT	0x0007
-	#define GMII_PHY_PAGE_SELECT_PAGE0	0X0000
-	#define GMII_PHY_PAGE_SELECT_PAGE1	0X0001
-	#define GMII_PHY_PAGE_SELECT_PAGE2	0X0002
-	#define GMII_PHY_PAGE_SELECT_PAGE3	0X0003
-	#define GMII_PHY_PAGE_SELECT_PAGE4	0X0004
-	#define GMII_PHY_PAGE_SELECT_PAGE5	0X0005
-	#define GMII_PHY_PAGE_SELECT_PAGE6	0X0006
 
 #define GMII_LED_LINK				0x1c
 	#define GMII_LED_LINK_MASK		0xf888
@@ -220,7 +232,46 @@
 	#define GMII_LED2_LINK_100		(1 << 9)
 	#define GMII_LED2_LINK_1000		(1 << 10)
 
-#define GMII_PHYPAGE				0x1e
+
+	// UA2 LED Setting
+	#define	LED_VALID		(1 << 15)
+
+	#define	LED0_ACTIVE		(1 << 0)
+	#define	LED0_LINK_10	(1 << 1)
+	#define	LED0_LINK_100	(1 << 2)
+	#define	LED0_LINK_1000	(1 << 3)
+	#define	LED0_FD			(1 << 4)
+	#define LED0_USB3_MASK	0x001f
+	
+	#define	LED1_ACTIVE		(1 << 5)
+	#define	LED1_LINK_10	(1 << 6)
+	#define	LED1_LINK_100	(1 << 7)
+	#define	LED1_LINK_1000	(1 << 8)
+	#define	LED1_FD			(1 << 9)
+	#define LED1_USB3_MASK	0x03e0
+		
+	#define	LED2_ACTIVE		(1 << 10)
+	#define	LED2_LINK_1000	(1 << 13)
+	#define	LED2_LINK_100	(1 << 12)
+	#define	LED2_LINK_10	(1 << 11)
+	#define	LED2_FD			(1 << 14)
+	#define LED2_USB3_MASK	0x7c00
+	
+	
+
+#define GMII_PHYPAGE					0x1e
+
+#define GMII_PHY_PAGE_SELECT			0x1f
+	#define GMII_PHY_PAGE_SELECT_EXT	0x0007
+	#define GMII_PHY_PAGE_SELECT_PAGE0	0X0000
+	#define GMII_PHY_PAGE_SELECT_PAGE1	0X0001
+	#define GMII_PHY_PAGE_SELECT_PAGE2	0X0002
+	#define GMII_PHY_PAGE_SELECT_PAGE3	0X0003
+	#define GMII_PHY_PAGE_SELECT_PAGE4	0X0004
+	#define GMII_PHY_PAGE_SELECT_PAGE5	0X0005
+	#define GMII_PHY_PAGE_SELECT_PAGE6	0X0006
+	
+
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
 struct ax88179_data {
