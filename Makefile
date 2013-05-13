@@ -5,6 +5,7 @@ TARGET	= ax88179_178a
 OBJS	= ax88179_178a.o
 MDIR	= drivers/net/usb
 KDIR	= /lib/modules/$(CURRENT)/build
+#KDIR	= /root/Desktop/Android/UBIQCONN/android-3.0
 SUBLEVEL= $(shell uname -r | cut -d '.' -f 3 | cut -d '.' -f 1 | cut -d '-' -f 1 | cut -d '_' -f 1)
 USBNET	= $(shell find $(KDIR)/include/linux/usb/* -name usbnet.h)
 

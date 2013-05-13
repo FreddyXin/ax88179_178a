@@ -11,6 +11,17 @@ Driver Compilation & Configuration on the Linux
 ==================
 Revision History :
 ==================
+Version 1.4.0		Feb. 26, 2013
+ * Fixed RX checksum errors issue
+ * Fixed RX hungup issue during long time iperf heavy traffic test
+ * Support Big-endian systems
+ * Fixed the default MTU to 1500
+ * Added the ax88179_change_mtu function to support Jumbo Frame
+ * Removed linkup variable from the driver private data structure.
+ * Added netif_carrier_on function in ax88179_status.
+ * Added bsize and ifg driver parameters. 
+ * Removed AX_Suspend and AX_Resume
+
 Version 1.3.0		Dec. 13, 2012
  * Modified bulk in parameter to improve the throughput on ARM.
  * Fixed suspend/resume issue on ARM.
