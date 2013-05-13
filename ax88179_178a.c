@@ -24,7 +24,7 @@
 #include <linux/version.h>
 //#include <linux/config.h>
 #ifdef	CONFIG_USB_DEBUG
-#   define DEBUG
+#define DEBUG
 #endif
 #include <linux/module.h>
 #include <linux/kmod.h>
@@ -42,7 +42,7 @@
 
 #include "asix.h"
 
-#define DRV_VERSION	"1.1.0"
+#define DRV_VERSION	"1.2.0"
 
 static char version[] =
 KERN_INFO "ASIX USB Ethernet Adapter:v" DRV_VERSION 
@@ -52,6 +52,12 @@ KERN_INFO "ASIX USB Ethernet Adapter:v" DRV_VERSION
 static int msg_enable = 0;
 module_param (msg_enable, int, 0);
 MODULE_PARM_DESC (msg_enable, "usbnet msg_enable");
+
+static int bi_size = 0;
+static int bsize = -1;
+module_param (bsize, int, 0);
+MODULE_PARM_DESC (bsize, "Maximum transfer size per bulk in");
+
 
 /* ASIX AX8817X based USB 2.0 Ethernet Devices */
 
@@ -139,9 +145,11 @@ ax88179_write_cmd_async(struct usbnet *dev, u8 cmd, u16 value, u16 index,
 	}
 }
 
+
 static void ax88179_status(struct usbnet *dev, struct urb *urb)
 {
 	struct ax88179_int_data *event;
+	struct ax88179_data *data = (struct ax88179_data *)dev->driver_priv;
 	int link;
 
 	if (urb->actual_length < 8)
@@ -151,12 +159,15 @@ static void ax88179_status(struct usbnet *dev, struct urb *urb)
 	link = event->link & AX_INT_PPLS_LINK;
 	if (netif_carrier_ok(dev->net) != link) {
 		if (link) {
-			netif_carrier_on(dev->net);
-			usbnet_defer_kevent (dev, EVENT_LINK_RESET );
-		} else {
+			data->linkup = 1;
+			if (data->lr_done < 2)
+	  		   usbnet_defer_kevent (dev, EVENT_LINK_RESET );
+		} else {			
+			data->linkup = 0;
+			data->lr_done = 0;
 			netif_carrier_off(dev->net);
 		}
-		netdev_info(dev->net, "ax88179 - Link status is: %d", link);
+		netdev_info(dev->net, "ax8817X - Link status is: %d\n", link);
 	}
 }
 
@@ -228,14 +239,15 @@ static int ax88179_suspend (struct usb_interface *intf,
 	/* Disable RX path */
 	ax88179_read_cmd(dev, AX_ACCESS_MAC, AX_MEDIUM_STATUS_MODE, 2, 2, tmp16);
 	*tmp16 &= ~AX_MEDIUM_RECEIVE_EN;
-	ax88179_write_cmd(dev, AX_ACCESS_MAC,  AX_MEDIUM_STATUS_MODE, 2, 2, tmp16);
 
 	/* Force bz */
-	*tmp16 = AX_PHYPWR_RSTCTL_BZ | AX_PHYPWR_RSTCTL_IPRL;
+	ax88179_read_cmd(dev, AX_ACCESS_MAC, AX_PHYPWR_RSTCTL, 2, 2, tmp16);
+	//*tmp16 |= AX_PHYPWR_RSTCTL_BZ | AX_PHYPWR_RSTCTL_IPRL | AX_PHYPWR_RSTCTL_WOLLP;
+	*tmp16 |= AX_PHYPWR_RSTCTL_BZ | AX_PHYPWR_RSTCTL_IPRL;
 	ax88179_write_cmd(dev, AX_ACCESS_MAC, AX_PHYPWR_RSTCTL, 2, 2, tmp16);
 
 	/* change clock */
-	*tmp16 = AX_CLK_SELECT_ACSREQ;
+	*tmp16 = 0;
 	ax88179_write_cmd(dev, AX_ACCESS_MAC, AX_CLK_SELECT, 1, 1, tmp16);
 
 	/* Configure RX control register => stop operation */
@@ -269,8 +281,13 @@ static int ax88179_resume (struct usb_interface *intf)
 	ax88179_write_cmd(dev, AX_ACCESS_MAC, AX_PHYPWR_RSTCTL, 2, 2, tmp16);
 	msleep (200);
 
+	/* Ethernet PHY Auto Detach*/
+	ax88179_AutoDetach(dev);
+
+
 	/* change clock */
-	*tmp16 = AX_CLK_SELECT_ACS | AX_CLK_SELECT_BCS;
+	ax88179_read_cmd(dev, AX_ACCESS_MAC,  AX_CLK_SELECT, 1, 1, tmp16);
+	*tmp16 |= AX_CLK_SELECT_ACS | AX_CLK_SELECT_BCS;
 	ax88179_write_cmd(dev, AX_ACCESS_MAC, AX_CLK_SELECT, 1, 1, tmp16);
 	msleep(100);
 
@@ -335,7 +352,6 @@ ax88179_set_wol(struct net_device *net, struct ethtool_wolinfo *wolinfo)
 		*opt &= ~AX_MONITOR_MODE_RWMP;
 
 	ax88179_write_cmd(dev, AX_ACCESS_MAC, AX_MONITOR_MODE, 1, 1, opt);
-
 	kfree (opt);
 
 	return 0;
@@ -387,7 +403,6 @@ static int ax88179_set_settings(struct net_device *net, struct ethtool_cmd *cmd)
 	struct usbnet *dev = netdev_priv(net);
 	return mii_ethtool_sset(&dev->mii,cmd);
 }
-
 
 
 static int ax88179_ioctl (struct net_device *net, struct ifreq *rq, int cmd)
@@ -499,7 +514,7 @@ static struct ethtool_ops ax88179_ethtool_ops = {
 static void ax88179_set_multicast(struct net_device *net)
 {
 	struct usbnet *dev = netdev_priv(net);
-	struct ax88179_data *data = (struct ax88179_data *)&dev->driver_priv;
+	struct ax88179_data *data = (struct ax88179_data *)dev->driver_priv;
 	u8 *m_filter = (u8*) dev->data;
 	u16 rx_ctl = (AX_RX_CTL_START | AX_RX_CTL_AB | AX_RX_CTL_IPE);
 	int mc_count;
@@ -573,7 +588,6 @@ static int ax88179_set_mac_addr (struct net_device *net, void *p)
 	/* Set the MAC address */
 	return ax88179_write_cmd (dev, AX_ACCESS_MAC, AX_NODE_ID, ETH_ALEN,
 						ETH_ALEN, net->dev_addr);
-
 }
 
 #if LINUX_VERSION_CODE > KERNEL_VERSION(2,6,29)
@@ -708,7 +722,7 @@ static int ax88179_convert_old_led(struct usbnet *dev, u8 eFuse, void *ledValue)
 	return 0;
 }
 
-static int ax88179_led_workaround(struct usbnet *dev)
+static int ax88179_led_setting(struct usbnet *dev)
 {
 	u8 LedFD;
 	u8 value = 0;
@@ -750,14 +764,11 @@ static int ax88179_led_workaround(struct usbnet *dev)
 		ax88179_read_cmd(dev, AX_ACCESS_MAC, AX_SROM_DATA_LOW, 1, 1, &value);
 		LedValue |= value;
 
-		//printk(KERN_DEBUG "		EEprom 0x42 value = %04X \n", LedValue);
-
 		if ((LedValue == 0xFFFF) || ((LedValue & LED_VALID) == 0))//load internal ROM for defaule setting
 			ax88179_convert_old_led(dev,0,&LedValue);	
 	}
 	else if (ax88179_check_ua2_efuse(dev, &LedValue) == AX_EEP_EFUSE_CORRECT) //check eFuse
 	{
-		//printk(KERN_DEBUG "		eFuse LED Mode = %04X \n", LedValue);	
 		if ((LedValue == 0xFFFF) || ((LedValue & LED_VALID) == 0))
 			ax88179_convert_old_led(dev,0,&LedValue);	
 	}
@@ -817,7 +828,7 @@ static int ax88179_led_workaround(struct usbnet *dev)
 	
 	if (LedValue & LED2_LINK_1000)
 		LedLink |= GMII_LED2_LINK_1000;
-	
+
 	tmp = LedAct;
 	ax88179_write_cmd(dev, AX_ACCESS_PHY, AX88179_PHY_ID, GMII_LED_ACTIVE, 2, &tmp);
 
@@ -827,12 +838,12 @@ static int ax88179_led_workaround(struct usbnet *dev)
 	tmp = GMII_PHY_PAGE_SELECT_PAGE0;
 	ax88179_write_cmd(dev, AX_ACCESS_PHY, AX88179_PHY_ID, GMII_PHY_PAGE_SELECT, 2, &tmp);
 	
-		
+	
 	// LED full duplex setting
 	LedFD = 0;
 	if (LedValue & LED0_FD)
 		LedFD |= 0x01;
-	else if ((LedValue & LED0_USB3_MASK) == 0);
+	else if ((LedValue & LED0_USB3_MASK) == 0)
 		LedFD |= 0x02;
 
 
@@ -852,11 +863,35 @@ static int ax88179_led_workaround(struct usbnet *dev)
 	return 0;	
 }
 
+static int ax88179_AutoDetach(struct usbnet *dev)
+{
+	u16 tmp;
+	
+	if (ax88179_read_cmd(dev, AX_ACCESS_EEPROM, 0x43, 1, 2, &tmp) < 0) 
+		return 0;
+
+	if((tmp == 0xFFFF) || (!(tmp & 0x0100)))
+		return 0;
+
+	/* Enable Auto Detach bit */
+	tmp=0;
+	ax88179_read_cmd(dev, AX_ACCESS_MAC, AX_CLK_SELECT, 1, 1, &tmp);
+	tmp |= AX_CLK_SELECT_ULR;
+	ax88179_write_cmd(dev, AX_ACCESS_MAC, AX_CLK_SELECT, 1, 1, &tmp);
+
+	ax88179_read_cmd(dev, AX_ACCESS_MAC, AX_PHYPWR_RSTCTL, 2, 2, &tmp);
+	tmp |= AX_PHYPWR_RSTCTL_AUTODETACH;
+	ax88179_write_cmd(dev, AX_ACCESS_MAC, AX_PHYPWR_RSTCTL, 2, 2, &tmp);
+
+	return 0;
+}
+
 static int ax88179_bind(struct usbnet *dev, struct usb_interface *intf)
 {
 	void *buf;
 	u16 *tmp16;
 	u8 *tmp;
+	u16 bi_timer;
 
 	struct ax88179_data *ax179_data = (struct ax88179_data *)dev->driver_priv;
 
@@ -876,12 +911,14 @@ static int ax88179_bind(struct usbnet *dev, struct usb_interface *intf)
 
 	ax179_data = (struct ax88179_data *) kmalloc(sizeof(struct ax88179_data), GFP_KERNEL);
 	if (!ax179_data) {
-		printk(KERN_ERR "Cannot allocate memory for AX88179 data");
+		printk(KERN_ERR "Cannot allocate memory for AX8817X data");
 		kfree (buf);
 		return -ENOMEM;
 	}
 	memset (ax179_data, 0, sizeof(*ax179_data));
 	dev->driver_priv = ax179_data;
+
+
 
 	/* Power up ethernet PHY */
 	*tmp16 = 0;
@@ -894,6 +931,8 @@ static int ax88179_bind(struct usbnet *dev, struct usb_interface *intf)
 	ax88179_write_cmd(dev, AX_ACCESS_MAC, AX_CLK_SELECT, 1, 1, tmp);
 	msleep (100);
 
+
+
 	ax88179_read_cmd (dev, AX_ACCESS_MAC, AX_NODE_ID, ETH_ALEN, ETH_ALEN, dev->net->dev_addr);
 	printk(KERN_DEBUG "MAC [%02x-%02x-%02x-%02x-%02x-%02x]\n",
 		dev->net->dev_addr[0], dev->net->dev_addr[1],
@@ -904,11 +943,13 @@ static int ax88179_bind(struct usbnet *dev, struct usb_interface *intf)
 	*tmp = AX_RX_BULKIN_QCTRL_TIME | AX_RX_BULKIN_QCTRL_IFG |
 						AX_RX_BULKIN_QCTRL_SIZE;
 
+	// default for USB3.0 to Giga
 	// Bulk in timer
-	*(tmp + 1) = 0x66;
-	*(tmp + 2) = 0x00;
-	// Bulk in size			
-	*(tmp + 3) = 0x14;
+	bi_timer = (24 * 1024 * 8) / 1000;
+	*(tmp + 1) = (bi_timer & 0xFF);
+	*(tmp + 2) = (bi_timer >> 8) & 0xFF;
+	// Bulk in size		
+	*(tmp + 3) = 24;
 	// Bulk in IFG
 	*(tmp + 4) = 0xff;
 
@@ -978,7 +1019,7 @@ static int ax88179_bind(struct usbnet *dev, struct usb_interface *intf)
 
 	ax88179_write_cmd(dev, AX_ACCESS_MAC, AX_MEDIUM_STATUS_MODE, 2, 2, tmp16);
 
-	ax88179_led_workaround(dev);
+	ax88179_led_setting(dev);
 
 	/* Restart autoneg */
 	*tmp16 = GMII_CONTROL_1000MB | GMII_CONTROL_ENABLE_AUTO |
@@ -1011,7 +1052,6 @@ static void ax88179_unbind(struct usbnet *dev, struct usb_interface *intf)
 		/* Power down ethernet PHY */
 		tmp16 = AX_PHYPWR_RSTCTL_BZ | AX_PHYPWR_RSTCTL_IPRL;
 		ax88179_write_cmd(dev, AX_ACCESS_MAC, AX_PHYPWR_RSTCTL, 2, 2, &tmp16);
-	
 		dev->driver_priv = NULL;
 		kfree (ax179_data);
 		msleep (200);
@@ -1026,7 +1066,7 @@ ax88179_rx_checksum (struct sk_buff *skb, struct ax88179_rx_pkt_header *pkt_hdr)
 
 	/* checksum error bit is set */
 	if (pkt_hdr->l3_csum_err || pkt_hdr->l4_csum_err) {
-//		printk(KERN_ERR "checksum error (0x%08x)\n", *((u32 *)pkt_hdr));
+		//printk(KERN_ERR "checksum error (0x%08x)\n", *((u32 *)pkt_hdr));
 		return;
 	}
 
@@ -1089,7 +1129,7 @@ static int ax88179_rx_fixup(struct usbnet *dev, struct sk_buff *skb)
 		if (ax_skb) {
 			ax_skb->len = pkt_len;
 			ax_skb->data = skb->data + 2;
-//			ax_skb->data = skb->data;
+			//ax_skb->data = skb->data;
 
 #if LINUX_VERSION_CODE < KERNEL_VERSION(2,6,22)
 			ax_skb->tail = ax_skb->data + pkt_len;
@@ -1123,13 +1163,12 @@ ax88179_tx_fixup(struct usbnet *dev, struct sk_buff *skb, gfp_t flags)
 
 	tx_hdr1 = skb->len;
 	tx_hdr2 = mss;
-
 	if (((skb->len + 8) % frame_size) == 0)
+	{
 		tx_hdr2 |= 0x80008000;	/* Enable padding */
+		skb->len += 2;
+	}
 
-	//if (mss)
-	//	netdev_dbg(dev->net, "tx skb->len %d, mss %d\n", skb->len, mss);
-	
 	skb_linearize (skb);
 
 	headroom = skb_headroom(skb);
@@ -1172,107 +1211,248 @@ ax88179_tx_fixup(struct usbnet *dev, struct sk_buff *skb, gfp_t flags)
 	return skb;
 }
 
+static int ax88179_unlink_urbs (struct usbnet *dev, struct sk_buff_head *q)
+{
+	unsigned long		flags;
+	struct sk_buff		*skb, *skbnext;
+	int			count = 0;
+
+	spin_lock_irqsave (&q->lock, flags);
+	skb_queue_walk_safe(q, skb, skbnext) {
+		struct skb_data		*entry;
+		struct urb		*urb;
+		int			retval;
+
+		entry = (struct skb_data *) skb->cb;
+		urb = entry->urb;
+
+		//*
+		 //* Get reference count of the URB to avoid it to be
+		 //* freed during usb_unlink_urb, which may trigger
+		 //* use-after-free problem inside usb_unlink_urb since
+		 //* usb_unlink_urb is always racing with .complete
+		 //* handler(include defer_bh).
+		 //*
+		usb_get_urb(urb);
+		spin_unlock_irqrestore(&q->lock, flags);
+		// during some PM-driven resume scenarios,
+		// these (async) unlinks complete immediately
+		retval = usb_unlink_urb (urb);
+		if (retval != -EINPROGRESS && retval != 0)
+			netdev_dbg(dev->net, "unlink urb err, %d\n", retval);
+		else
+			count++;
+		usb_put_urb(urb);
+		spin_lock_irqsave(&q->lock, flags);
+	}
+	spin_unlock_irqrestore (&q->lock, flags);
+	return count;
+}
+
+
 static int ax88179_link_reset (struct usbnet *dev)
 {
+	struct ax88179_data *data = (struct ax88179_data *)dev->driver_priv;
 	struct ethtool_cmd ecmd;
 	void *buf;
 	u8 *tmp;
-	u16 mode = AX_MEDIUM_RECEIVE_EN    | AX_MEDIUM_TXFLOW_CTRLEN |
-		   AX_MEDIUM_RXFLOW_CTRLEN | AX_MEDIUM_ALWAYS_ONE    | 
-		   AX_MEDIUM_FULL_DUPLEX; // 0x0134
+	u16 bi_timer = 0;
+	u16 mode;
+ 	u16 delay = HZ/10;
+	u32 tmp32 = 0x40000000;
+	unsigned long jTimeout;
 
+	if (!data->linkup) {
+		ax88179_unlink_urbs (dev, &dev->txq);
+		return 0;
+	}
 
-	buf = kmalloc (6, GFP_KERNEL);
+	jTimeout = jiffies + delay;
+
+	while (tmp32 & 0x40000000) {
+		mode = 0;
+		ax88179_write_cmd(dev, AX_ACCESS_MAC, AX_RX_CTL, 2, 2, &mode);		
+		ax88179_write_cmd(dev, AX_ACCESS_MAC, AX_RX_CTL, 2, 2, &data->rxctl);
+	
+		// link up, check the usb device control TX FIFO full or empty
+		ax88179_read_cmd(dev,0x81, 0x8c, 0, 4,&tmp32);
+
+		if (time_after(jiffies, jTimeout))
+			return 0;
+	}
+	data->lr_done++;
+
+	mode = AX_MEDIUM_RECEIVE_EN    | AX_MEDIUM_TXFLOW_CTRLEN |
+		   AX_MEDIUM_RXFLOW_CTRLEN | AX_MEDIUM_ALWAYS_ONE;
+
+	buf = kmalloc (5, GFP_KERNEL);
 	tmp = (u8 *)buf;
-	mii_check_media (&dev->mii, 1, 1);
 	mii_ethtool_gset (&dev->mii, &ecmd);
+
+	bi_size = bsize;
+	if((bi_size > 0) && (bi_size < 5))
+	   bi_size = 5;
+	else if(bi_size > 24)
+	   bi_size = 24;
+
+	if(!bsize)
+	  memset(tmp, 0, 5);
 
 	ax88179_read_cmd (dev, AX_ACCESS_MAC, PHYSICAL_LINK_STATUS, 1, 1, tmp);
 
 	if (ecmd.speed == SPEED_1000) {
 		mode |= AX_MEDIUM_GIGAMODE;	/* Bit 0 : GM */
-
 		if (*tmp & AX_USB_SS) {
-			/* RX bulk configuration */
-			*tmp = AX_RX_BULKIN_QCTRL_TIME | AX_RX_BULKIN_QCTRL_SIZE | AX_RX_BULKIN_QCTRL_IFG;
+     	   	   if(bsize)
+		   {
+			// Bulk in size	
+			if(bsize < 0)
+			  bi_size = 20;	
 
+			*(tmp + 3) = bi_size;		
 			// Bulk in timer
-			*(tmp + 1) = 0x66;
-			*(tmp + 2) = 0x00;
-			// Bulk in size			
-			*(tmp + 3) = 0x14;
+			bi_timer = (bi_size * 1024 * 8) / 1000;
+			*(tmp + 1) = (bi_timer & 0xFF);
+			*(tmp + 2) = (bi_timer >> 8) & 0xFF;
 			// Bulk in IFG
 			*(tmp + 4) = 0xff;
 
-
-			ax88179_write_cmd(dev, AX_ACCESS_MAC, AX_RX_BULKIN_QCTRL, 5, 5, tmp);
-			printk(KERN_INFO "USB3.0 Speed 1000\n");
+		   }
+		   printk(KERN_INFO "USB3.0 Speed 1000\n");
 		}
 		else if (*tmp & AX_USB_HS) {
-			/* RX bulk configuration */
-			*tmp = AX_RX_BULKIN_QCTRL_TIME | AX_RX_BULKIN_QCTRL_SIZE | AX_RX_BULKIN_QCTRL_IFG;
+     	   	   if(bsize)
+		   {
+			// Bulk in size	
+			if(bsize < 0)
+			  bi_size = 24;	
 
+			*(tmp + 3) = bi_size;		
 			// Bulk in timer
-			*(tmp + 1) = 0x50;
-			*(tmp + 2) = 0x02;
-			// Bulk in size
-			*(tmp + 3) = 0x18;	// 24k
+			bi_timer = (bi_size * 1024 * 8) / 330;
+			*(tmp + 1) = (bi_timer & 0xFF);
+			*(tmp + 2) = (bi_timer >> 8) & 0xFF;
 			// Bulk in IFG
-			*(tmp + 4) = 0x08;
-		
+			//*(tmp + 4) = 0x08;
+			*(tmp + 4) = 0x00;
 
-			ax88179_write_cmd(dev, AX_ACCESS_MAC, AX_RX_BULKIN_QCTRL, 5, 5, tmp);
-			printk(KERN_INFO "USB2.0 Speed 1000\n");
+		   }
+		   printk(KERN_INFO "USB2.0 Speed 1000\n");
+		}
+		else {
+     	   	   if(bsize)
+		   {
+			// Bulk in size	
+			if(bsize < 0)
+			  bi_size = 24;	
+
+			*(tmp + 3) = bi_size;		
+			// Bulk in timer
+			bi_timer = (bi_size * 1024 * 8) / 10;
+			*(tmp + 1) = (bi_timer & 0xFF);
+			*(tmp + 2) = (bi_timer >> 8) & 0xFF;
+			// Bulk in IFG
+			//*(tmp + 4) = 0x08;
+			*(tmp + 4) = 0x00;
+
+		   }
+		   printk(KERN_INFO "USB1.1 Speed 1000\n");
 		}
 
 	} else if (ecmd.speed == SPEED_100) {
 		mode |= AX_MEDIUM_PS;	/* Bit 9 : PS */
-		
 		if (*tmp & AX_USB_SS) {
-			/* RX bulk configuration */
-			*tmp = AX_RX_BULKIN_QCTRL_TIME | AX_RX_BULKIN_QCTRL_SIZE | AX_RX_BULKIN_QCTRL_IFG;
+ 	   	   if(bsize)
+		   {
+			// Bulk in size	
+			if(bsize < 0)
+			  bi_size = 24;	
 
+			*(tmp + 3) = bi_size;		
 			// Bulk in timer
-			*(tmp + 1) = 0x50;
-			*(tmp + 2) = 0x06;
-			// Bulk in size
-			*(tmp + 3) = 0x18;	// 24k
+			bi_timer = (bi_size * 1024 * 8) / 100;
+			*(tmp + 1) = (bi_timer & 0xFF);
+			*(tmp + 2) = (bi_timer >> 8) & 0xFF;
 			// Bulk in IFG
 			*(tmp + 4) = 0x00;
 
-			ax88179_write_cmd(dev, AX_ACCESS_MAC, AX_RX_BULKIN_QCTRL, 5, 5, tmp);
-			printk(KERN_INFO "USB3.0 Speed 100\n");
+		   }
+		   printk(KERN_INFO "USB3.0 Speed 100\n");
 		}
 		else if (*tmp & AX_USB_HS) {
-			/* RX bulk configuration */
-			*tmp = AX_RX_BULKIN_QCTRL_TIME | AX_RX_BULKIN_QCTRL_SIZE | AX_RX_BULKIN_QCTRL_IFG;
 
+ 	   	   if(bsize)
+		   {
+			// Bulk in size	
+			if(bsize < 0)
+			  bi_size = 24;	
+
+			*(tmp + 3) = bi_size;		
 			// Bulk in timer
-			*(tmp + 1) = 0x50;
-			*(tmp + 2) = 0x06;
-			// Bulk in size
-			*(tmp + 3) = 0x18;	// 24k
+			bi_timer = (bi_size * 1024 * 8) / 100;
+			*(tmp + 1) = (bi_timer & 0xFF);
+			*(tmp + 2) = (bi_timer >> 8) & 0xFF;
 			// Bulk in IFG
 			*(tmp + 4) = 0x00;
 
-			ax88179_write_cmd(dev, AX_ACCESS_MAC, AX_RX_BULKIN_QCTRL, 5, 5, tmp);
-			printk(KERN_INFO "USB2.0 Speed 100\n");
+		   }
+		   printk(KERN_INFO "USB2.0 Speed 100\n");
 		}
-		printk(KERN_INFO "Speed 100 ");
+		else {
+     	   	   if(bsize)
+		   {
+			// Bulk in size	
+			if(bsize < 0)
+			  bi_size = 24;	
+
+			*(tmp + 3) = bi_size;		
+			// Bulk in timer
+			bi_timer = (bi_size * 1024 * 8) / 10;
+			*(tmp + 1) = (bi_timer & 0xFF);
+			*(tmp + 2) = (bi_timer >> 8) & 0xFF;
+			// Bulk in IFG
+			//*(tmp + 4) = 0x08;
+			*(tmp + 4) = 0x00;
+
+		   }
+		   printk(KERN_INFO "USB1.1 Speed 100\n");
+		}
 	} else {
-		printk(KERN_INFO "Speed 10 ");
+		// Bulk in size	
+		if(bsize < 0)
+		  bi_size = 24;	
+
+		*(tmp + 3) = bi_size;		
+		// Bulk in timer
+		bi_timer = (bi_size * 1024 * 8) / 10;
+		*(tmp + 1) = (bi_timer & 0xFF);
+		*(tmp + 2) = (bi_timer >> 8) & 0xFF;
+		// Bulk in IFG
+		*(tmp + 4) = 0x00;
+
+		if (*tmp & AX_USB_SS)
+		  printk(KERN_INFO "USB3.0 Speed 10 ");
+		else if (*tmp & AX_USB_HS)
+   		  printk(KERN_INFO "USB2.0 Speed 10 ");
+		else
+		  printk(KERN_INFO "USB1.1 Speed 10 ");
 	}
+
+	/* RX bulk configuration */
+	*tmp = AX_RX_BULKIN_QCTRL_TIME | AX_RX_BULKIN_QCTRL_SIZE | AX_RX_BULKIN_QCTRL_IFG;
+	ax88179_write_cmd(dev, AX_ACCESS_MAC, AX_RX_BULKIN_QCTRL, 5, 5, tmp);
 
 	if (ecmd.duplex == DUPLEX_FULL) {
 		mode |= AX_MEDIUM_FULL_DUPLEX;	/* Bit 1 : FD */
 		printk(KERN_INFO "Full duplex\n");
-	} else {
-		printk(KERN_INFO "Half duplex\n");
-	}
+	} 
 
-	printk(KERN_INFO "Write medium type 0x%04x\n", mode);
+	mode |= 0x08;
+	printk(KERN_INFO "Write medium type: 0x%04x\n", mode);
 	/* Configure default medium type => giga */
 	ax88179_write_cmd(dev, AX_ACCESS_MAC, AX_MEDIUM_STATUS_MODE, 2, 2, &mode);
+
+	mii_check_media (&dev->mii, 1, 1);
 
 	return 0;
 }
@@ -1283,12 +1463,13 @@ static int ax88179_reset (struct usbnet *dev)
 	u16 *tmp16;
 	u8 *tmp;
 	struct ax88179_data *ax179_data = (struct ax88179_data *) dev->driver_priv;
-
 	buf = kmalloc (6, GFP_KERNEL);
 
 	tmp16 = (u16 *)buf;
 	tmp = (u8 *)buf;
 
+	ax179_data->linkup = 0;
+	ax179_data->lr_done = 0;
 	/* Power up ethernet PHY */
 	*tmp16 = 0;
 	ax88179_write_cmd(dev, AX_ACCESS_MAC, AX_PHYPWR_RSTCTL, 2, 2, tmp16);
@@ -1299,6 +1480,9 @@ static int ax88179_reset (struct usbnet *dev)
 	*tmp = AX_CLK_SELECT_ACS | AX_CLK_SELECT_BCS;
 	ax88179_write_cmd(dev, AX_ACCESS_MAC, AX_CLK_SELECT, 1, 1, tmp);
 	msleep (100);
+
+	/* Ethernet PHY Auto Detach*/
+	ax88179_AutoDetach(dev);
 
 	ax88179_read_cmd (dev, AX_ACCESS_MAC, AX_NODE_ID, ETH_ALEN, ETH_ALEN, dev->net->dev_addr);
 	netdev_dbg(dev->net, "MAC [%02x-%02x-%02x-%02x-%02x-%02x]\n",
@@ -1359,7 +1543,7 @@ static int ax88179_reset (struct usbnet *dev)
 
 	ax88179_write_cmd(dev, AX_ACCESS_MAC, AX_MEDIUM_STATUS_MODE, 2, 2, tmp16);
 
-	ax88179_led_workaround(dev);
+	ax88179_led_setting(dev);
 
 	/* Restart autoneg */
 	*tmp16 = GMII_CONTROL_1000MB | GMII_CONTROL_ENABLE_AUTO |
@@ -1375,6 +1559,16 @@ static int ax88179_reset (struct usbnet *dev)
 
 }
 
+
+static int ax88179_stop (struct usbnet *dev)
+{
+	u16 tmp16;
+	struct ax88179_data *data = (struct ax88179_data *)dev->driver_priv;
+	data->lr_done = 0;
+	tmp16 &= ~AX_MEDIUM_RECEIVE_EN;
+	ax88179_write_cmd(dev, AX_ACCESS_MAC, AX_MEDIUM_STATUS_MODE, 2, 2, &tmp16);
+	return 0;
+}
 static int ax_suspend (struct usb_interface *intf,
 #if LINUX_VERSION_CODE > KERNEL_VERSION(2,6,10)
 			pm_message_t message)
@@ -1384,7 +1578,7 @@ static int ax_suspend (struct usb_interface *intf,
 {
 	struct usbnet *dev = usb_get_intfdata(intf);
 	struct ax88179_data *data = (struct ax88179_data *)dev->driver_priv;
-
+	data->lr_done = 0;
 	return data->suspend (intf, message);
 }
 
@@ -1403,7 +1597,21 @@ static const struct driver_info ax88179_info = {
 	.status = ax88179_status,
 	.link_reset = ax88179_link_reset,
 	.reset = ax88179_reset,
-//	.flags = FLAG_ETHER | FLAG_FRAMING_AX | FLAG_HW_IP_ALIGNMENT,
+	.stop = ax88179_stop,
+	.flags = FLAG_ETHER | FLAG_FRAMING_AX,
+	.rx_fixup = ax88179_rx_fixup,
+	.tx_fixup = ax88179_tx_fixup,
+};
+
+
+static const struct driver_info ax88178a_info = {
+	.description = "ASIX AX88178A USB 2.0 Gigibit Ethernet",
+	.bind = ax88179_bind,
+	.unbind = ax88179_unbind,
+	.status = ax88179_status,
+	.link_reset = ax88179_link_reset,
+	.reset = ax88179_reset,
+	.stop = ax88179_stop,
 	.flags = FLAG_ETHER | FLAG_FRAMING_AX,
 	.rx_fixup = ax88179_rx_fixup,
 	.tx_fixup = ax88179_tx_fixup,
@@ -1417,15 +1625,14 @@ static const struct usb_device_id	products [] = {
 }, {
 	// ASIX AX88178A 10/100/1000
         USB_DEVICE (0x0b95, 0x178A),
-        .driver_info = (unsigned long) &ax88179_info,
+        .driver_info = (unsigned long) &ax88178a_info,
 },
 	{ },		// END
 };
 MODULE_DEVICE_TABLE(usb, products);
 
 static struct usb_driver asix_driver = {
-//	.owner =	THIS_MODULE,
-	.name =		"ax88179",
+	.name =		"ax88179_178a",
 	.id_table =	products,
 	.probe =	usbnet_probe,
 	.suspend =	ax_suspend,
@@ -1447,6 +1654,6 @@ static void __exit asix_exit(void)
 module_exit(asix_exit);
 
 MODULE_AUTHOR("David Hollis");
-MODULE_DESCRIPTION("ASIX AX88179 based USB 3.0 Gigabit Ethernet Devices");
+MODULE_DESCRIPTION("ASIX AX88179_178A based USB 2.0/3.0 Gigabit Ethernet Devices");
 MODULE_LICENSE("GPL");
 

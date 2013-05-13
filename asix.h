@@ -9,6 +9,8 @@
 #define AX_RX_CHECKSUM			1
 #define AX_TX_CHECKSUM			2
 
+#define AX_BULKIN_24K			0x18;	// 24k
+
 #define AX_ACCESS_MAC			0x01
 #define AX_ACCESS_PHY			0x02
 #define AX_ACCESS_WAKEUP		0x03
@@ -20,6 +22,7 @@
 #define PHYSICAL_LINK_STATUS		0x02
 	#define	AX_USB_SS		0x04
 	#define	AX_USB_HS		0x02
+	#define	AX_USB_FS		0x01
 
 #define GENERAL_STATUS				0x03
 	#define	AX_SECLD		0x04	/* Check AX88179 version. UA1:Bit2 = 0,  UA2:Bit2 = 1 */
@@ -76,8 +79,10 @@
 	#define AX_GPIO_CTRL_GPIO1EN	0x20		
 
 #define AX_PHYPWR_RSTCTL		0x26
-	#define AX_PHYPWR_RSTCTL_BZ		0x10
-	#define AX_PHYPWR_RSTCTL_IPRL		0x20
+	#define AX_PHYPWR_RSTCTL_BZ		0x0010
+	#define AX_PHYPWR_RSTCTL_IPRL		0x0020
+	#define AX_PHYPWR_RSTCTL_AUTODETACH	0x1000
+	#define AX_PHYPWR_RSTCTL_WOLLP		0x8000
 
 #define AX_RX_BULKIN_QCTRL		0x2e
 	#define AX_RX_BULKIN_QCTRL_TIME		0x01
@@ -93,6 +98,7 @@
 	#define AX_CLK_SELECT_BCS		0x01
 	#define AX_CLK_SELECT_ACS		0x02
 	#define AX_CLK_SELECT_ACSREQ		0x10
+	#define AX_CLK_SELECT_ULR		0x08
 
 #define AX_RXCOE_CTL			0x34
 	#define AX_RXCOE_IP			0x01
@@ -284,6 +290,8 @@ struct ax88179_data {
 #endif
 	u8 checksum;
 	u16 rxctl;
+	u8 linkup;
+	u8 lr_done;
 #if 0
 	u16 LedAct;
 	u16 LedLink;
@@ -338,6 +346,8 @@ struct ax88179_rx_pkt_header {
 
 static int ax88179_reset (struct usbnet *dev);
 static int ax88179_link_reset (struct usbnet *dev);
+static int ax88179_unlink_urbs (struct usbnet *dev, struct sk_buff_head *q);
+static int ax88179_AutoDetach (struct usbnet *dev);
 
 #endif /* __LINUX_USBNET_ASIX_H */
 

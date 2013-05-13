@@ -11,6 +11,13 @@ Driver Compilation & Configuration on the Linux
 ==================
 Revision History :
 ==================
+Version 1.2.0		Aug. 28, 2012
+ * Modified the ax88179_link_reset function.
+ * Implemented the auto detach function.
+ * Supported the AX88178A device.
+ * Fixed the media change issue.
+ * Fixed the wakeup issue by modified the clock select register.
+
 Version 1.1.0		May. 08, 2012
  * Modified the ax88179_led_workaround function.
  * Fixups the ethtool_ops struct for compilation issues in newest kernel version 3.3.0. 

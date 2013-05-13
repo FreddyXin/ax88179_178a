@@ -1,6 +1,6 @@
 CURRENT	= $(shell uname -r)
-TARGET	= ax88179
-OBJS	= ax88179.o
+TARGET	= ax88179_178a
+OBJS	= ax88179_178a.o
 MDIR	= drivers/net/usb
 KDIR	= /lib/modules/$(CURRENT)/build
 SUBLEVEL= $(shell uname -r | cut -d '.' -f 3 | cut -d '.' -f 1 | cut -d '-' -f 1 | cut -d '_' -f 1)
