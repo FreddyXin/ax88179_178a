@@ -1,8 +1,15 @@
-CURRENT	= $(shell uname -r)
 #TARGET	= usbnet
 #OBJS	= usbnet.o
 TARGET	= ax88179_178a
 OBJS	= ax88179_178a.o
+
+ifeq ($(KERNELRELEASE),)
+
+#
+# building from this directory
+#
+
+CURRENT	= $(shell uname -r)
 MDIR	= drivers/net/usb
 KDIR	= /lib/modules/$(CURRENT)/build
 #KDIR	= /root/Desktop/Android/UBIQCONN/android-3.0
@@ -41,3 +48,13 @@ clean:
 .PHONY: modules clean
 
 -include $(KDIR)/Rules.make
+
+else # neq($(KERNELRELEASE),)
+
+#
+# building from kbuild (make -C <kernel_directory> M=`pwd`)
+#
+
+obj-m      := $(TARGET).o
+
+endif # neq($(KERNELRELEASE),)

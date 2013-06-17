@@ -66,6 +66,7 @@ README		This file
 ax88179.c	AX88179 Linux driver main file
 ax88179.h	AX88179 Linux driver header file
 Makefile	AX88179 driver make file
+dkms.conf       Configuration for DKMS support
 COPYING	GNU GERNERAL LICENSE
 
 ===========================
@@ -112,6 +113,39 @@ Usage
 If you want to unload the driver, just executing the following command:
 
 	[root@localhost anywhere]# rmmod ax88179
+
+===============
+DKMS support
+===============
+
+If you want the driver being compiled each time a new kernel is installed,
+you need to enable DKMS support.
+
+1. Make sure that version in dkms.conf matches that in ax88179_178a.c:
+
+	[root@localhost template]# grep DRV_VERSION ax88179_178a.c
+	[root@localhost template]# grep PACKAGE_VERSION dkms.conf
+
+2. Create the source directory for DKMS (must be named module-version):
+
+	[root@localhost template]# mkdir /usr/src/ax88179_178a-1.4.0
+
+3. Copy all the module source files to the source directory:
+
+	[root@localhost template]# cp * /usr/src/ax88179_178a-1.4.0
+
+4. Enable, build and install DKMS:
+
+	[root@localhost anywhere]# dkms add -m ax88179_178a -v 1.4.0
+	[root@localhost anywhere]# dkms build -m ax88179_178a -v 1.4.0
+	[root@localhost anywhere]# dkms install -m ax88179_178a -v 1.4.0
+
+5. Now the module should load automatically if the device is plugged in,
+   but you can also load it manually:
+
+	[root@localhost anywhere]# modprobe ax88179_178a
+
+6. Whenever a new kernel is installed, the module will be installed too.
 
 ===============
 DRIVER PARAMETERS
