@@ -314,8 +314,9 @@ struct ax88179_int_data {
 #define AX_RXHDR_L4_TYPE_TCP			16
 #define AX_RXHDR_L3CSUM_ERR			2
 #define AX_RXHDR_L4CSUM_ERR			1
-#define AX_RXHDR_CRC_ERR			0x80000000
-#define AX_RXHDR_DROP_ERR			0x40000000
+#define AX_RXHDR_CRC_ERR			0x20000000
+#define AX_RXHDR_MII_ERR			0x40000000
+#define AX_RXHDR_DROP_ERR			0x80000000
 #if 0
 struct ax88179_rx_pkt_header {
 
